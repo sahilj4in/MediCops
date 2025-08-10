@@ -1,29 +1,26 @@
-# Use Python slim image based on Debian Bullseye
-FROM python:3.10-slim-bullseye
+# Use a standard Python runtime as the parent image
+FROM python:3.10-slim
 
-# Install Tesseract and dependencies
+# Install system dependencies, including Tesseract OCR and its data files
+# The executable will be installed to /usr/bin/tesseract on this base image.
 RUN apt-get update && \
     apt-get install -y tesseract-ocr libtesseract-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Verify Tesseract installation
-RUN tesseract --version || { echo "Tesseract installation failed"; exit 1; }
-
-# Check if binary exists
-RUN ls /usr/bin | grep tesseract || { echo "Tesseract binary not found"; exit 1; }
-
-# Set working directory
+# Set the working directory for the container to the root of the app
 WORKDIR /app
 
-# Copy requirements and install
+# Copy the requirements file into the working directory
 COPY requirements.txt .
+
+# Install your Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy the rest of the application code into the container
 COPY . .
 
-# Set environment variable
+# Set the TESSERACT_CMD environment variable to the correct path
 ENV TESSERACT_CMD=/usr/bin/tesseract
 
-# Run the application
+# Set the entry point to run your application
 CMD ["python", "mcp_starter.py"]
