@@ -1,21 +1,24 @@
-# Use an official Python runtime as a parent image
-FROM python:3.10-slim
+# Use a base image that comes with Tesseract pre-installed.
+# This eliminates all apt-get and pathing issues.
+FROM tesseract-ocr/tesseract:latest
 
-# Install system dependencies, including Tesseract OCR
-RUN apt-get update && apt-get install -y tesseract-ocr libtesseract-dev && rm -rf /var/lib/apt/lists/*
-
-# Add Tesseract's bin directory to the PATH
-ENV PATH="/usr/bin:${PATH}"
+# The 'tesseract' image is based on a slim Debian distribution,
+# so we can use apt-get to install Python.
+RUN apt-get update && \
+    apt-get install -y python3 python3-pip && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set the working directory to the directory containing your application code
-WORKDIR /app/mcp-starter/mcp-bearer-token
+WORKDIR /app
 
-# Copy the requirements file and install dependencies
+# Copy the requirements file into the working directory
 COPY mcp-starter/mcp-bearer-token/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Install your Python dependencies
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application code into the container
 COPY mcp-starter/mcp-bearer-token .
 
 # Set the entry point to run your application
-CMD ["python", "mcp_starter.py"]
+CMD ["python3", "mcp_starter.py"]
