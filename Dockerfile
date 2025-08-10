@@ -1,24 +1,28 @@
-# Use a base image that comes with Tesseract pre-installed.
-# This eliminates all apt-get and pathing issues.
-FROM tesseract-ocr/tesseract:latest
+# Use a Debian base image for better control
+FROM debian:bullseye-slim
 
-# The 'tesseract' image is based on a slim Debian distribution,
-# so we can use apt-get to install Python.
+# Install Python, Tesseract, and dependencies
 RUN apt-get update && \
-    apt-get install -y python3 python3-pip && \
+    apt-get install -y python3 python3-pip tesseract-ocr libtesseract-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Set the working directory to the directory containing your application code
+# Verify Tesseract installation
+RUN tesseract --version || { echo "Tesseract installation failed"; exit 1; }
+
+# Set the working directory
 WORKDIR /app
 
-# Copy the requirements file into the working directory
+# Copy requirements file
 COPY mcp-starter/mcp-bearer-token/requirements.txt .
 
-# Install your Python dependencies
+# Install Python dependencies
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code into the container
+# Copy application code
 COPY mcp-starter/mcp-bearer-token .
 
-# Set the entry point to run your application
+# Set environment variable for Tesseract
+ENV TESSERACT_CMD=/usr/bin/tesseract
+
+# Set the entry point
 CMD ["python3", "mcp_starter.py"]

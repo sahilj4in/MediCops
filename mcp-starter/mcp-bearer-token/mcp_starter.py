@@ -8,6 +8,8 @@ import json
 from typing import Annotated, List
 from datetime import datetime
 from urllib.parse import urlparse, unquote
+import subprocess
+import logging
 
 import httpx
 import asyncpg
@@ -24,38 +26,40 @@ from scipy.ndimage import gaussian_filter
 from numpy import array
 import io
 import traceback
-# from twilio.rest import Client # Commented out Twilio import
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
 
 # --- Load environment variables ---
 load_dotenv()
 
 TOKEN = os.environ.get("AUTH_TOKEN")
 MY_NUMBER = os.environ.get("MY_NUMBER")
-TO_NUMBER = os.environ.get("TO_NUMBER") # New variable added to the code
+TO_NUMBER = os.environ.get("TO_NUMBER")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 POSTGRES_URL = os.environ.get("POSTGRES_URL")
-# Commented out Twilio-related environment variables
-# TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
-# TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
-# TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")
-
 
 assert TOKEN, "Please set AUTH_TOKEN in your .env file"
 assert MY_NUMBER, "Please set MY_NUMBER in your .env file"
 assert OPENROUTER_API_KEY, "Please set OPENROUTER_API_KEY in your .env file"
 assert POSTGRES_URL, "Please set POSTGRES_URL in your .env file"
-# Commented out Twilio-related assertions
-# assert TWILIO_ACCOUNT_SID, "Please set TWILIO_ACCOUNT_SID in your .env file"
-# assert TWILIO_AUTH_TOKEN, "Please set TWILIO_AUTH_TOKEN in your .env file"
-# assert TWILIO_WHATSAPP_NUMBER, "Please set TWILIO_WHATSAPP_NUMBER in your .env file"
 
-# Configure Tesseract path for Windows
-if sys.platform == "win32":
-    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-
-# Commented out Twilio Client initialization
-# twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-
+# Configure Tesseract path
+try:
+    tesseract_cmd = os.getenv('TESSERACT_CMD', '/usr/bin/tesseract')
+    if sys.platform == "win32":
+        tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    
+    # Verify Tesseract is accessible
+    result = subprocess.run([tesseract_cmd, '--version'], capture_output=True, text=True)
+    logging.debug(f"Tesseract version: {result.stdout}")
+    pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+except subprocess.CalledProcessError as e:
+    logging.error(f"Failed to verify Tesseract: {e}")
+    raise Exception(f"Tesseract not found at {tesseract_cmd}: {e}")
+except FileNotFoundError as e:
+    logging.error(f"Tesseract executable not found at {tesseract_cmd}")
+    raise Exception(f"Tesseract executable not found at {tesseract_cmd}: {e}")
 
 # --- Auth Provider ---
 class SimpleBearerAuthProvider(BearerAuthProvider):
@@ -310,6 +314,8 @@ async def get_prescription_reminders() -> List[str]:
 async def extract_medicines_from_prescription(
     puch_image_data: Annotated[str, Field(description="Base64-encoded prescription image data (jpg/png)")]
 ) -> str:
+    logging.debug(f"Tesseract path: {pytesseract.pytesseract.tesseract_cmd}")
+    
     try:
         if "," in puch_image_data:
             puch_image_data = puch_image_data.split(",")[1]
@@ -333,10 +339,14 @@ async def extract_medicines_from_prescription(
         binarized_img_array = ((blurred_img > 128) * 255).astype('uint8')
         binarized_image = Image.fromarray(binarized_img_array).convert('1')
 
+        logging.debug("Attempting OCR with PSM 6")
         extracted_text = pytesseract.image_to_string(binarized_image, config='--psm 6')
+        logging.debug(f"Extracted text (PSM 6): {extracted_text}")
 
         if not extracted_text.strip():
-             extracted_text = pytesseract.image_to_string(denoised_image, config='--psm 3')
+            logging.debug("No text extracted with PSM 6, trying PSM 3")
+            extracted_text = pytesseract.image_to_string(denoised_image, config='--psm 3')
+            logging.debug(f"Extracted text (PSM 3): {extracted_text}")
 
         medicines = parse_medicines_from_text(extracted_text)
         
@@ -346,7 +356,8 @@ async def extract_medicines_from_prescription(
         return f"Extracted medicines: {', '.join(medicines)}"
 
     except Exception as e:
-        traceback.print_exc()
+        logging.error(f"OCR processing failed: {str(e)}")
+        logging.error(traceback.format_exc())
         raise McpError(ErrorData(code=INVALID_PARAMS, message=f"OCR processing failed: {str(e)}"))
 
 pending_orders = {}
@@ -487,64 +498,12 @@ async def blood_report_progress_summary() -> str:
     except Exception as e:
         return f"Error generating blood report summary: {str(e)}"
 
-# Commented out the Twilio message sending function
-# def send_whatsapp_message(to_number: str, message_body: str):
-#     """Sends a WhatsApp message using the Twilio API."""
-#     try:
-#         twilio_client.messages.create(
-#             from_=TWILIO_WHATSAPP_NUMBER,
-#             to=f'whatsapp:{to_number}',
-#             body=message_body
-#         )
-#         return True
-#     except Exception as e:
-#         print(f"Failed to send WhatsApp message: {e}")
-#         return False
-
-# Commented out the entire proactive reminder background task
-# async def reminder_sender_loop():
-#     while True:
-#         try:
-#             # Check for pending reminders for the current time
-#             hour = datetime.now().hour
-#             now_word = "morning" if 5 <= hour < 12 else \
-#                        "afternoon" if 12 <= hour < 17 else \
-#                        "evening" if 17 <= hour < 21 else \
-#                        "night"
-#             
-#             async with pg_pool.acquire() as conn:
-#                 rows = await conn.fetch("""
-#                     SELECT medicine_name, quantity
-#                     FROM prescriptions
-#                     WHERE LOWER(time) = $1 AND is_medicine_taken = FALSE
-#                 """, now_word)
-#
-#             if rows:
-#                 for p in rows:
-#                     reminder_message = f"💊 Reminder: It's time to take {p['medicine_name']} ({p['quantity']})."
-#                     
-#                     if send_whatsapp_message(TO_NUMBER, reminder_message):
-#                         print(f"PROACTIVE REMINDER SENT to {TO_NUMBER}: {reminder_message}")
-#             
-#             # Reset is_medicine_taken for the next day's reminders
-#             if now_word == "night":
-#                 async with pg_pool.acquire() as conn:
-#                     await conn.execute("UPDATE prescriptions SET is_medicine_taken = FALSE")
-#         
-#         except Exception as e:
-#             print(f"Error in reminder sender loop: {e}")
-#
-#         # Sleep for a period before checking again (e.g., every 30 minutes)
-#         await asyncio.sleep(1800)  # 1800 seconds = 30 minutes
-
 # ============================
 #  SERVER START
 # ============================
 async def main():
-    print("🚀 Starting MCP server with PostgreSQL and Twilio integration...")
+    logging.info("🚀 Starting MCP server with PostgreSQL integration...")
     await init_pg_pool()
-    # Commented out the background task creation
-    # asyncio.create_task(reminder_sender_loop())
     await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
 
 if __name__ == "__main__":
