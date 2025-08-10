@@ -311,6 +311,9 @@ async def extract_medicines_from_prescription(
     puch_image_data: Annotated[str, Field(description="Base64-encoded prescription image data (jpg/png)")]
 ) -> str:
     try:
+        if "," in puch_image_data:
+            puch_image_data = puch_image_data.split(",")[1]
+
         image_bytes = base64.b64decode(puch_image_data)
         image = Image.open(io.BytesIO(image_bytes))
 
