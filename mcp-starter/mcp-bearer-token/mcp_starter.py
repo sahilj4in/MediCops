@@ -24,35 +24,37 @@ from scipy.ndimage import gaussian_filter
 from numpy import array
 import io
 import traceback
-from twilio.rest import Client
+# from twilio.rest import Client # Commented out Twilio import
 
 # --- Load environment variables ---
 load_dotenv()
 
 TOKEN = os.environ.get("AUTH_TOKEN")
 MY_NUMBER = os.environ.get("MY_NUMBER")
-TO_NUMBER = os.environ.get("TO_NUMBER")
+TO_NUMBER = os.environ.get("TO_NUMBER") # New variable added to the code
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 POSTGRES_URL = os.environ.get("POSTGRES_URL")
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")
+# Commented out Twilio-related environment variables
+# TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+# TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+# TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")
 
 
 assert TOKEN, "Please set AUTH_TOKEN in your .env file"
 assert MY_NUMBER, "Please set MY_NUMBER in your .env file"
 assert OPENROUTER_API_KEY, "Please set OPENROUTER_API_KEY in your .env file"
 assert POSTGRES_URL, "Please set POSTGRES_URL in your .env file"
-assert TWILIO_ACCOUNT_SID, "Please set TWILIO_ACCOUNT_SID in your .env file"
-assert TWILIO_AUTH_TOKEN, "Please set TWILIO_AUTH_TOKEN in your .env file"
-assert TWILIO_WHATSAPP_NUMBER, "Please set TWILIO_WHATSAPP_NUMBER in your .env file"
+# Commented out Twilio-related assertions
+# assert TWILIO_ACCOUNT_SID, "Please set TWILIO_ACCOUNT_SID in your .env file"
+# assert TWILIO_AUTH_TOKEN, "Please set TWILIO_AUTH_TOKEN in your .env file"
+# assert TWILIO_WHATSAPP_NUMBER, "Please set TWILIO_WHATSAPP_NUMBER in your .env file"
 
 # Configure Tesseract path for Windows
 if sys.platform == "win32":
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-# Initialize Twilio Client
-twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+# Commented out Twilio Client initialization
+# twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 
 # --- Auth Provider ---
@@ -482,54 +484,55 @@ async def blood_report_progress_summary() -> str:
     except Exception as e:
         return f"Error generating blood report summary: {str(e)}"
 
-def send_whatsapp_message(to_number: str, message_body: str):
-    """Sends a WhatsApp message using the Twilio API."""
-    try:
-        twilio_client.messages.create(
-            from_=TWILIO_WHATSAPP_NUMBER,
-            to=f'whatsapp:{to_number}',
-            body=message_body
-        )
-        return True
-    except Exception as e:
-        print(f"Failed to send WhatsApp message: {e}")
-        return False
+# Commented out the Twilio message sending function
+# def send_whatsapp_message(to_number: str, message_body: str):
+#     """Sends a WhatsApp message using the Twilio API."""
+#     try:
+#         twilio_client.messages.create(
+#             from_=TWILIO_WHATSAPP_NUMBER,
+#             to=f'whatsapp:{to_number}',
+#             body=message_body
+#         )
+#         return True
+#     except Exception as e:
+#         print(f"Failed to send WhatsApp message: {e}")
+#         return False
 
-# --- Conceptual background task for proactive reminders ---
-async def reminder_sender_loop():
-    while True:
-        try:
-            # Check for pending reminders for the current time
-            hour = datetime.now().hour
-            now_word = "morning" if 5 <= hour < 12 else \
-                       "afternoon" if 12 <= hour < 17 else \
-                       "evening" if 17 <= hour < 21 else \
-                       "night"
-            
-            async with pg_pool.acquire() as conn:
-                rows = await conn.fetch("""
-                    SELECT medicine_name, quantity
-                    FROM prescriptions
-                    WHERE LOWER(time) = $1 AND is_medicine_taken = FALSE
-                """, now_word)
-
-            if rows:
-                for p in rows:
-                    reminder_message = f"💊 Reminder: It's time to take {p['medicine_name']} ({p['quantity']})."
-                    
-                    if send_whatsapp_message(TO_NUMBER, reminder_message):
-                        print(f"PROACTIVE REMINDER SENT to {TO_NUMBER}: {reminder_message}")
-            
-            # Reset is_medicine_taken for the next day's reminders
-            if now_word == "night":
-                async with pg_pool.acquire() as conn:
-                    await conn.execute("UPDATE prescriptions SET is_medicine_taken = FALSE")
-        
-        except Exception as e:
-            print(f"Error in reminder sender loop: {e}")
-
-        # Sleep for a period before checking again (e.g., every 30 minutes)
-        await asyncio.sleep(1800)  # 1800 seconds = 30 minutes
+# Commented out the entire proactive reminder background task
+# async def reminder_sender_loop():
+#     while True:
+#         try:
+#             # Check for pending reminders for the current time
+#             hour = datetime.now().hour
+#             now_word = "morning" if 5 <= hour < 12 else \
+#                        "afternoon" if 12 <= hour < 17 else \
+#                        "evening" if 17 <= hour < 21 else \
+#                        "night"
+#             
+#             async with pg_pool.acquire() as conn:
+#                 rows = await conn.fetch("""
+#                     SELECT medicine_name, quantity
+#                     FROM prescriptions
+#                     WHERE LOWER(time) = $1 AND is_medicine_taken = FALSE
+#                 """, now_word)
+#
+#             if rows:
+#                 for p in rows:
+#                     reminder_message = f"💊 Reminder: It's time to take {p['medicine_name']} ({p['quantity']})."
+#                     
+#                     if send_whatsapp_message(TO_NUMBER, reminder_message):
+#                         print(f"PROACTIVE REMINDER SENT to {TO_NUMBER}: {reminder_message}")
+#             
+#             # Reset is_medicine_taken for the next day's reminders
+#             if now_word == "night":
+#                 async with pg_pool.acquire() as conn:
+#                     await conn.execute("UPDATE prescriptions SET is_medicine_taken = FALSE")
+#         
+#         except Exception as e:
+#             print(f"Error in reminder sender loop: {e}")
+#
+#         # Sleep for a period before checking again (e.g., every 30 minutes)
+#         await asyncio.sleep(1800)  # 1800 seconds = 30 minutes
 
 # ============================
 #  SERVER START
@@ -537,8 +540,8 @@ async def reminder_sender_loop():
 async def main():
     print("🚀 Starting MCP server with PostgreSQL and Twilio integration...")
     await init_pg_pool()
-    # Schedule the reminder sender loop as a background task
-    asyncio.create_task(reminder_sender_loop())
+    # Commented out the background task creation
+    # asyncio.create_task(reminder_sender_loop())
     await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
 
 if __name__ == "__main__":
