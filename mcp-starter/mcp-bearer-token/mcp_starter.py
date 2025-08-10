@@ -27,8 +27,10 @@ from numpy import array
 import io
 import traceback
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
+# --- Configure logging ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.getLogger("asyncio").setLevel(logging.WARNING)
+logging.getLogger("fastmcp").setLevel(logging.INFO)
 
 # --- Load environment variables ---
 load_dotenv()
@@ -39,27 +41,34 @@ TO_NUMBER = os.environ.get("TO_NUMBER")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 POSTGRES_URL = os.environ.get("POSTGRES_URL")
 
-assert TOKEN, "Please set AUTH_TOKEN in your .env file"
-assert MY_NUMBER, "Please set MY_NUMBER in your .env file"
-assert OPENROUTER_API_KEY, "Please set OPENROUTER_API_KEY in your .env file"
-assert POSTGRES_URL, "Please set POSTGRES_URL in your .env file"
+# Assert that critical environment variables are set
+for var_name in ["AUTH_TOKEN", "MY_NUMBER", "OPENROUTER_API_KEY", "POSTGRES_URL"]:
+    if not os.environ.get(var_name):
+        logging.critical(f"Missing required environment variable: {var_name}")
+        sys.exit(1)
 
-# Configure Tesseract path
+
+tesseract_cmd = None
+if os.getenv('TESSERACT_CMD'):
+    tesseract_cmd = os.getenv('TESSERACT_CMD')
+elif sys.platform == "win32":
+    tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+else: # Assume Linux-like environment
+    tesseract_cmd = '/usr/bin/tesseract'
+
 try:
-    tesseract_cmd = os.getenv('TESSERACT_CMD', '/usr/bin/tesseract')
-    if sys.platform == "win32":
-        tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    
-    # Verify Tesseract is accessible
-    result = subprocess.run([tesseract_cmd, '--version'], capture_output=True, text=True)
-    logging.debug(f"Tesseract version: {result.stdout}")
-    pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
-except subprocess.CalledProcessError as e:
-    logging.error(f"Failed to verify Tesseract: {e}")
-    raise Exception(f"Tesseract not found at {tesseract_cmd}: {e}")
-except FileNotFoundError as e:
-    logging.error(f"Tesseract executable not found at {tesseract_cmd}")
-    raise Exception(f"Tesseract executable not found at {tesseract_cmd}: {e}")
+    if tesseract_cmd:
+        result = subprocess.run([tesseract_cmd, '--version'], capture_output=True, text=True, check=True)
+        logging.info(f"Using Tesseract executable: {tesseract_cmd}")
+        logging.debug(f"Tesseract version check: {result.stdout.strip()}")
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+    else:
+        logging.warning("TESSERACT_CMD not set and platform is not recognized. `pytesseract` may not work.")
+except (subprocess.CalledProcessError, FileNotFoundError) as e:
+    logging.critical(f"Tesseract executable not found or failed to run at '{tesseract_cmd}'. "
+                     "OCR functionality will be unavailable. Please ensure Tesseract is installed and its path is correct.")
+    logging.critical(f"Error details: {e}")
+
 
 # --- Auth Provider ---
 class SimpleBearerAuthProvider(BearerAuthProvider):
@@ -82,60 +91,68 @@ mcp = FastMCP(
 # --- Tool: validate (required by Puch) ---
 @mcp.tool
 async def validate() -> str:
+    """Verifies the server is running and returns the server's phone number."""
     return MY_NUMBER
 
 # ============================
-#  POSTGRESQL POOL & DB FUNCTIONS
+#  POSTGRESQL POOL & DB FUNCTIONS
 # ============================
 pg_pool = None
 
 async def init_pg_pool():
     global pg_pool
-    url = urlparse(POSTGRES_URL)
-    user = unquote(url.username) if url.username else None
-    password = unquote(url.password) if url.password else None
-    database = url.path.lstrip('/') if url.path else None
-    host = url.hostname or "localhost"
-    port = url.port or 5432
+    try:
+        url = urlparse(POSTGRES_URL)
+        user = unquote(url.username) if url.username else None
+        password = unquote(url.password) if url.password else None
+        database = url.path.lstrip('/') if url.path else None
+        host = url.hostname or "localhost"
+        port = url.port or 5432
 
-    pg_pool = await asyncpg.create_pool(
-        user=user,
-        password=password,
-        database=database,
-        host=host,
-        port=port,
-        min_size=1,
-        max_size=10,
-    )
-    # Create tables if not exists
-    async with pg_pool.acquire() as conn:
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS prescriptions (
-            id SERIAL PRIMARY KEY,
-            medicine_name VARCHAR(100) NOT NULL,
-            quantity VARCHAR(50) NOT NULL,
-            time VARCHAR(50) NOT NULL,
-            is_medicine_taken BOOLEAN DEFAULT FALSE,
-            created_at TIMESTAMP DEFAULT NOW()
+        pg_pool = await asyncpg.create_pool(
+            user=user,
+            password=password,
+            database=database,
+            host=host,
+            port=port,
+            min_size=1,
+            max_size=10,
         )
-        """)
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS blood_reports (
-            id SERIAL PRIMARY KEY,
-            test_date DATE NOT NULL,
-            hemoglobin FLOAT,
-            total_cholesterol FLOAT,
-            bilirubin FLOAT,
-            wbc_count FLOAT,
-            blood_glucose FLOAT,
-            serum_creatinine FLOAT,
-            tsh FLOAT,
-            platelet_count FLOAT,
-            alt FLOAT,
-            hbA1c FLOAT,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-        """)
+        logging.info("Successfully connected to PostgreSQL pool.")
+        
+        # Create tables if not exists
+        async with pg_pool.acquire() as conn:
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS prescriptions (
+                id SERIAL PRIMARY KEY,
+                medicine_name VARCHAR(100) NOT NULL,
+                quantity VARCHAR(50) NOT NULL,
+                time VARCHAR(50) NOT NULL,
+                is_medicine_taken BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+            """)
+            await conn.execute("""
+            CREATE TABLE IF NOT EXISTS blood_reports (
+                id SERIAL PRIMARY KEY,
+                test_date DATE NOT NULL,
+                hemoglobin FLOAT,
+                total_cholesterol FLOAT,
+                bilirubin FLOAT,
+                wbc_count FLOAT,
+                blood_glucose FLOAT,
+                serum_creatinine FLOAT,
+                tsh FLOAT,
+                platelet_count FLOAT,
+                alt FLOAT,
+                hbA1c FLOAT,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+            """)
+        logging.info("Database tables checked and created if necessary.")
+    except Exception as e:
+        logging.critical(f"Failed to initialize PostgreSQL pool: {e}")
+        sys.exit(1)
 
 async def save_prescription_to_db(data: dict):
     async with pg_pool.acquire() as conn:
@@ -174,21 +191,21 @@ async def fetch_all_blood_reports():
     async with pg_pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT test_date, hemoglobin, total_cholesterol, bilirubin, wbc_count, blood_glucose, serum_creatinine,
-                    tsh, platelet_count, alt, hbA1c
+                     tsh, platelet_count, alt, hbA1c
             FROM blood_reports
             ORDER BY test_date ASC
         """)
         return [dict(row) for row in rows]
 
 # ============================
-#  SYMPTOM CHECKER TOOL
+#  SYMPTOM CHECKER TOOL
 # ============================
 SYMPTOM_CHECKER_DESCRIPTION = """
 Analyzes user-provided symptoms and suggests possible conditions, home remedies, and specialist recommendations.
 This tool does not provide a diagnosis and users should always consult a medical professional.
 """
 
-async def query_openrouter(symptoms: str) -> str:
+async def query_openrouter(symptoms: str, system_prompt: str) -> str:
     async with httpx.AsyncClient(verify=False) as client:
         try:
             response = await client.post(
@@ -196,17 +213,13 @@ async def query_openrouter(symptoms: str) -> str:
                 headers={
                     "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                     "Content-Type": "application/json",
-                    "X-Title": "Symptom Checker MCP Server",
+                    "X-Title": "Health Assistant MCP Server",
                 },
                 json={
                     "model": "meta-llama/llama-3.3-70b-instruct:free",
                     "messages": [
-                        {"role": "system", "content": (
-                            "You are a health information assistant. Provide possible conditions, "
-                            "home remedies, and specialist recommendations for the given symptoms. "
-                            "Do not provide a diagnosis. Always include a disclaimer."
-                        )},
-                        {"role": "user", "content": f"Analyze these symptoms: {symptoms}"},
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": symptoms},
                     ],
                 },
                 timeout=30,
@@ -215,6 +228,7 @@ async def query_openrouter(symptoms: str) -> str:
             result = response.json()
             return result["choices"][0]["message"]["content"]
         except Exception as e:
+            logging.error(f"Failed to query AI model: {e}")
             return f"<error>Failed to query AI model: {str(e)}</error>"
 
 @mcp.tool(description=SYMPTOM_CHECKER_DESCRIPTION)
@@ -226,15 +240,21 @@ async def symptom_checker(symptoms: Annotated[str, Field(description="A descript
         "⚠ Disclaimer: This is for educational purposes only and not medical advice. "
         "Always consult a doctor.\n\n"
     )
-
-    ai_response = await query_openrouter(symptoms)
+    system_prompt = (
+        "You are a health information assistant. Provide possible conditions, "
+        "home remedies, and specialist recommendations for the given symptoms. "
+        "Do not provide a diagnosis. Always include a disclaimer."
+    )
+    
+    ai_response = await query_openrouter(f"Analyze these symptoms: {symptoms}", system_prompt)
+    
     if "<error>" in ai_response:
         return f"{disclaimer}Symptoms: {symptoms}\nError: {ai_response}"
 
     return f"{disclaimer}Symptoms: {symptoms}\nAI Analysis:\n{ai_response}"
 
 # ============================
-#  PRESCRIPTION & MEDICINE ORDERING TOOLS
+#  PRESCRIPTION & MEDICINE ORDERING TOOLS
 # ============================
 def parse_medicines_from_text(text: str):
     patterns = [
@@ -257,6 +277,7 @@ async def save_prescription(prescription_text: Annotated[str, Field(description=
         await save_prescription_to_db(data)
         return f"✅ Prescription saved: {data['medicine_name']} ({data['quantity']}) for the {data['time']}."
     except Exception as e:
+        logging.error(f"Error saving prescription: {e}", exc_info=True)
         return f"Error saving prescription: {str(e)}"
 
 def parse_prescription(text: str) -> dict:
@@ -306,6 +327,7 @@ async def get_prescription_reminders() -> List[str]:
                 reminders.append(f"💊 Reminder: It's time to take {p['medicine_name']} ({p['quantity']}).")
 
     except Exception as e:
+        logging.error(f"Error fetching reminders: {e}", exc_info=True)
         reminders.append(f"[Error fetching reminders] {e}")
 
     return reminders
@@ -314,7 +336,10 @@ async def get_prescription_reminders() -> List[str]:
 async def extract_medicines_from_prescription(
     puch_image_data: Annotated[str, Field(description="Base64-encoded prescription image data (jpg/png)")]
 ) -> str:
-    logging.debug(f"Tesseract path: {pytesseract.pytesseract.tesseract_cmd}")
+    if not pytesseract.pytesseract.tesseract_cmd:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message="Tesseract is not configured on this server. OCR functionality is disabled."))
+    
+    logging.debug(f"Using Tesseract path: {pytesseract.pytesseract.tesseract_cmd}")
     
     try:
         if "," in puch_image_data:
@@ -323,41 +348,38 @@ async def extract_medicines_from_prescription(
         image_bytes = base64.b64decode(puch_image_data)
         image = Image.open(io.BytesIO(image_bytes))
 
+        # Basic image preprocessing for better OCR results
         if image.mode not in ('RGB', 'L'):
             image = image.convert('RGB')
-
+        
+        # Upscale and convert to grayscale
         gray_image = ImageOps.grayscale(image)
         width, height = gray_image.size
-        new_width = int(width * (300 / 72)) if width < 1000 else width
-        new_height = int(height * (300 / 72)) if height < 1000 else height
-        resized_image = gray_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        denoised_image = resized_image.filter(ImageFilter.MedianFilter(3))
-
-        img_array = array(denoised_image)
-        blurred_img = gaussian_filter(img_array, sigma=1)
+        scale_factor = 2 if max(width, height) < 1000 else 1
+        resized_image = gray_image.resize((width * scale_factor, height * scale_factor), Image.Resampling.LANCZOS)
         
-        binarized_img_array = ((blurred_img > 128) * 255).astype('uint8')
-        binarized_image = Image.fromarray(binarized_img_array).convert('1')
-
-        logging.debug("Attempting OCR with PSM 6")
-        extracted_text = pytesseract.image_to_string(binarized_image, config='--psm 6')
-        logging.debug(f"Extracted text (PSM 6): {extracted_text}")
-
+        # Apply filters
+        denoised_image = resized_image.filter(ImageFilter.MedianFilter(3))
+        
+        # Attempt OCR
+        logging.debug("Attempting OCR with default settings")
+        extracted_text = pytesseract.image_to_string(denoised_image, config='--psm 6')
+        
         if not extracted_text.strip():
-            logging.debug("No text extracted with PSM 6, trying PSM 3")
+            logging.debug("No text extracted, trying another config")
             extracted_text = pytesseract.image_to_string(denoised_image, config='--psm 3')
-            logging.debug(f"Extracted text (PSM 3): {extracted_text}")
+
+        logging.debug(f"Extracted text: {extracted_text}")
 
         medicines = parse_medicines_from_text(extracted_text)
         
         if not medicines:
-            return "No medicines detected in the prescription image."
+            return "No medicines detected in the prescription image. Please ensure the image is clear and contains readable text."
 
         return f"Extracted medicines: {', '.join(medicines)}"
 
     except Exception as e:
-        logging.error(f"OCR processing failed: {str(e)}")
-        logging.error(traceback.format_exc())
+        logging.error(f"OCR processing failed: {str(e)}", exc_info=True)
         raise McpError(ErrorData(code=INVALID_PARAMS, message=f"OCR processing failed: {str(e)}"))
 
 pending_orders = {}
@@ -376,7 +398,7 @@ async def order_medicines(medicine_list: Annotated[str, Field(description="Comma
 
     order_id = generate_order_id()
     otp = generate_otp()
-    pending_orders[order_id] = {"medicines": medicines, "otp": otp, "confirmed": False}
+    pending_orders[order_id] = {"medicines": medicines, "otp": otp, "confirmed": False, "created_at": datetime.now()}
     return f"Order ID: {order_id}\nMedicines: {', '.join(medicines)}\nOTP (for demo): {otp}"
 
 @mcp.tool(description="Confirm medicine order with OTP.")
@@ -384,13 +406,23 @@ async def confirm_order(order_id: str, otp: str) -> str:
     order = pending_orders.get(order_id)
     if not order:
         raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid order ID."))
+    
+    # Simple cleanup of old orders (e.g., > 1 hour old)
+    for oid, odata in list(pending_orders.items()):
+        if (datetime.now() - odata["created_at"]).total_seconds() > 3600:
+            del pending_orders[oid]
+
     if otp != order["otp"]:
         raise McpError(ErrorData(code=INVALID_PARAMS, message="Invalid OTP."))
     order["confirmed"] = True
+    
+    # Remove confirmed order to free up memory
+    del pending_orders[order_id]
+
     return f"Order {order_id} confirmed for: {', '.join(order['medicines'])}"
 
 # ============================
-#  BLOOD REPORTS TOOL
+#  BLOOD REPORTS TOOL
 # ============================
 BLOOD_REPORT_PATTERNS = {
     "hemoglobin": r"Hemoglobin\s*[:=]?\s*([\d.]+)",
@@ -411,7 +443,7 @@ def parse_blood_report(text: str) -> dict:
     for key, pattern in BLOOD_REPORT_PATTERNS.items():
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            val = match.group(1)
+            val = match.group(1).strip()
             if key == "test_date":
                 for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
                     try:
@@ -441,6 +473,7 @@ async def save_blood_report(report_text: Annotated[str, Field(description="Raw b
         response_data = {k: v for k, v in data.items() if v is not None}
         return f"✅ Blood report saved for date {data['test_date']}. Data captured: {json.dumps(response_data, default=str)}"
     except Exception as e:
+        logging.error(f"Error saving blood report: {e}", exc_info=True)
         return f"Error saving blood report: {str(e)}"
 
 BLOOD_REPORT_SUMMARY_SYSTEM_PROMPT = """
@@ -452,31 +485,6 @@ The summary should be easy to understand for a non-medical person but medically 
 Always include a disclaimer that this is not medical advice and they should consult a healthcare professional for diagnosis.
 """
 
-async def query_blood_report_summary_ai(reports_json: str) -> str:
-    async with httpx.AsyncClient(verify=False) as client:
-        try:
-            response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                    "X-Title": "Blood Report Summary MCP Server",
-                },
-                json={
-                    "model": "meta-llama/llama-3.3-70b-instruct:free",
-                    "messages": [
-                        {"role": "system", "content": BLOOD_REPORT_SUMMARY_SYSTEM_PROMPT},
-                        {"role": "user", "content": f"Here is the blood test history data:\n{reports_json}\nPlease provide a progress summary."}
-                    ],
-                },
-                timeout=30,
-            )
-            response.raise_for_status()
-            result = response.json()
-            return result["choices"][0]["message"]["content"]
-        except Exception as e:
-            return f"<error>Failed to query AI model: {str(e)}</error>"
-
 @mcp.tool(description="Get an AI-generated progress summary based on your blood test history.")
 async def blood_report_progress_summary() -> str:
     try:
@@ -485,7 +493,7 @@ async def blood_report_progress_summary() -> str:
             return "No blood reports found to analyze."
 
         reports_json = json.dumps(reports, indent=2, default=str)
-        ai_summary = await query_blood_report_summary_ai(reports_json)
+        ai_summary = await query_openrouter(f"Here is the blood test history data:\n{reports_json}\nPlease provide a progress summary.", BLOOD_REPORT_SUMMARY_SYSTEM_PROMPT)
         
         if "<error>" in ai_summary:
             return f"AI summary generation failed: {ai_summary}"
@@ -496,13 +504,14 @@ async def blood_report_progress_summary() -> str:
         )
         return f"{disclaimer}\n\n{ai_summary}"
     except Exception as e:
+        logging.error(f"Error generating blood report summary: {e}", exc_info=True)
         return f"Error generating blood report summary: {str(e)}"
 
 # ============================
-#  SERVER START
+#  SERVER START
 # ============================
 async def main():
-    logging.info("🚀 Starting MCP server with PostgreSQL integration...")
+    logging.info("🚀 Starting Health Assistant MCP server...")
     await init_pg_pool()
     await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
 
