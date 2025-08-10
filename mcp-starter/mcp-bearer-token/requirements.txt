@@ -1,0 +1,9 @@
+fastmcp
+asyncpg
+python-dotenv
+Pillow
+pytesseract
+scipy
+numpy
+httpx
+twilio
